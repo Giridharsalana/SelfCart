@@ -1,0 +1,71 @@
+name: self_cart_app
+description: A comprehensive self-checkout cart application with barcode scanning and payment integration.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # Firebase
+  firebase_core: ^2.24.2
+  firebase_auth: ^4.15.3
+  cloud_firestore: ^4.13.6
+  firebase_storage: ^11.5.6
+  
+  # Authentication
+  google_sign_in: ^6.1.6
+  
+  # Barcode/QR Scanning
+  mobile_scanner: ^3.5.6
+  
+  # State Management
+  provider: ^6.1.1
+  
+  # UI Components
+  cupertino_icons: ^1.0.2
+  flutter_svg: ^2.0.9
+  cached_network_image: ^3.3.0
+  
+  # Payment Integration
+  razorpay_flutter: ^1.3.6
+  stripe_payment: ^1.1.4
+  
+  # Utilities
+  http: ^1.1.0
+  shared_preferences: ^2.2.2
+  image_picker: ^1.0.4
+  permission_handler: ^11.1.0
+  
+  # PDF Generation for receipts
+  pdf: ^3.10.7
+  printing: ^5.11.1
+  
+  # Date formatting
+  intl: ^0.18.1
+  
+  # Loading indicators
+  flutter_spinkit: ^5.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  
+  assets:
+    - assets/images/
+    - assets/icons/
+  
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700
+
