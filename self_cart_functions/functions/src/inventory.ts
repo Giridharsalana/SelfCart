@@ -3,6 +3,16 @@ import * as admin from 'firebase-admin';
 
 const db = admin.firestore();
 
+interface CategoryStats {
+  [category: string]: {
+    count: number;
+    totalStock: number;
+    totalValue: number;
+    lowStockCount: number;
+    outOfStockCount: number;
+  };
+}
+
 // Trigger when product stock is updated
 export const onStockUpdated = functions.firestore
   .document('products/{productId}')
@@ -10,11 +20,11 @@ export const onStockUpdated = functions.firestore
     const before = change.before.data();
     const after = change.after.data();
     const productId = context.params.productId;
-    
+
     // Check if stock changed
     if (before.stock !== after.stock) {
       console.log(`Stock updated for product ${productId}: ${before.stock} -> ${after.stock}`);
-      
+
       try {
         // Create stock movement record
         await db.collection('stockMovements').add({
@@ -27,7 +37,7 @@ export const onStockUpdated = functions.firestore
           updatedBy: after.updatedBy || 'system',
           createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
-        
+
         // Check for low stock alert
         const lowStockThreshold = after.lowStockThreshold || 10;
         if (after.stock <= lowStockThreshold && before.stock > lowStockThreshold) {
@@ -41,17 +51,17 @@ export const onStockUpdated = functions.firestore
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             read: false
           });
-          
+
           console.log(`Low stock alert created for product ${productId}`);
         }
-        
+
         // Check for out of stock
         if (after.stock === 0 && before.stock > 0) {
           await db.collection('products').doc(productId).update({
             isOutOfStock: true,
             outOfStockSince: admin.firestore.FieldValue.serverTimestamp()
           });
-          
+
           await db.collection('notifications').add({
             type: 'out_of_stock',
             productId,
@@ -59,17 +69,17 @@ export const onStockUpdated = functions.firestore
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             read: false
           });
-          
+
           console.log(`Product ${productId} marked as out of stock`);
         }
-        
+
         // Check if back in stock
         if (after.stock > 0 && before.stock === 0) {
           await db.collection('products').doc(productId).update({
             isOutOfStock: false,
             backInStockAt: admin.firestore.FieldValue.serverTimestamp()
           });
-          
+
           await db.collection('notifications').add({
             type: 'back_in_stock',
             productId,
@@ -78,7 +88,7 @@ export const onStockUpdated = functions.firestore
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             read: false
           });
-          
+
           console.log(`Product ${productId} is back in stock`);
         }
       } catch (error) {
@@ -92,26 +102,26 @@ export const bulkUpdateInventory = functions.https.onCall(async (data, context) 
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
-  
+
   // Check if user is admin
   const userDoc = await db.collection('users').doc(context.auth.uid).get();
   if (!userDoc.exists || !userDoc.data()?.isAdmin) {
     throw new functions.https.HttpsError('permission-denied', 'Only admins can bulk update inventory');
   }
-  
+
   const { updates, reason = 'bulk_update' } = data;
-  
+
   if (!Array.isArray(updates) || updates.length === 0) {
     throw new functions.https.HttpsError('invalid-argument', 'Updates array is required');
   }
-  
+
   try {
     const batch = db.batch();
-    const results = [];
-    
+    const results: any[] = [];
+
     for (const update of updates) {
       const { productId, stock, operation = 'set' } = update;
-      
+
       if (!productId || typeof stock !== 'number') {
         results.push({
           productId,
@@ -120,10 +130,10 @@ export const bulkUpdateInventory = functions.https.onCall(async (data, context) 
         });
         continue;
       }
-      
+
       const productRef = db.collection('products').doc(productId);
       const productDoc = await productRef.get();
-      
+
       if (!productDoc.exists) {
         results.push({
           productId,
@@ -132,10 +142,10 @@ export const bulkUpdateInventory = functions.https.onCall(async (data, context) 
         });
         continue;
       }
-      
+
       const product = productDoc.data()!;
       let newStock;
-      
+
       switch (operation) {
         case 'set':
           newStock = Math.max(0, stock);
@@ -154,14 +164,14 @@ export const bulkUpdateInventory = functions.https.onCall(async (data, context) 
           });
           continue;
       }
-      
+
       batch.update(productRef, {
         stock: newStock,
         stockUpdateReason: reason,
         updatedBy: context.auth.uid,
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
-      
+
       results.push({
         productId,
         success: true,
@@ -170,9 +180,9 @@ export const bulkUpdateInventory = functions.https.onCall(async (data, context) 
         operation
       });
     }
-    
+
     await batch.commit();
-    
+
     // Create bulk update log
     await db.collection('bulkOperations').add({
       type: 'inventory_update',
@@ -184,7 +194,7 @@ export const bulkUpdateInventory = functions.https.onCall(async (data, context) 
       results,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
-    
+
     return {
       success: true,
       totalUpdates: updates.length,
@@ -203,35 +213,35 @@ export const generateInventoryReport = functions.https.onCall(async (data, conte
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
-  
+
   // Check if user is admin
   const userDoc = await db.collection('users').doc(context.auth.uid).get();
   if (!userDoc.exists || !userDoc.data()?.isAdmin) {
     throw new functions.https.HttpsError('permission-denied', 'Only admins can generate inventory reports');
   }
-  
+
   const { includeOutOfStock = true, includeInactive = false, category } = data;
-  
+
   try {
-    let query = db.collection('products');
-    
+    let query: admin.firestore.Query = db.collection('products');
+
     if (!includeInactive) {
       query = query.where('isActive', '==', true);
     }
-    
+
     if (category) {
       query = query.where('category', '==', category);
     }
-    
+
     const productsSnapshot = await query.get();
-    const products = [];
-    
+    const products: any[] = [];
+
     let totalProducts = 0;
     let totalValue = 0;
     let lowStockCount = 0;
     let outOfStockCount = 0;
-    const categoryStats = {};
-    
+    const categoryStats: CategoryStats = {};
+
     productsSnapshot.forEach(doc => {
       const product = doc.data();
       const productData = {
@@ -246,17 +256,17 @@ export const generateInventoryReport = functions.https.onCall(async (data, conte
         isLowStock: (product.stock || 0) <= (product.lowStockThreshold || 10),
         isOutOfStock: (product.stock || 0) === 0
       };
-      
+
       if (includeOutOfStock || !productData.isOutOfStock) {
         products.push(productData);
       }
-      
+
       totalProducts++;
       totalValue += productData.value;
-      
+
       if (productData.isLowStock) lowStockCount++;
       if (productData.isOutOfStock) outOfStockCount++;
-      
+
       // Category statistics
       if (!categoryStats[product.category]) {
         categoryStats[product.category] = {
@@ -267,7 +277,7 @@ export const generateInventoryReport = functions.https.onCall(async (data, conte
           outOfStockCount: 0
         };
       }
-      
+
       const catStats = categoryStats[product.category];
       catStats.count++;
       catStats.totalStock += product.stock || 0;
@@ -275,7 +285,7 @@ export const generateInventoryReport = functions.https.onCall(async (data, conte
       if (productData.isLowStock) catStats.lowStockCount++;
       if (productData.isOutOfStock) catStats.outOfStockCount++;
     });
-    
+
     const report = {
       generatedAt: new Date().toISOString(),
       generatedBy: context.auth.uid,
@@ -290,14 +300,14 @@ export const generateInventoryReport = functions.https.onCall(async (data, conte
       categoryStats,
       products: products.sort((a, b) => a.name.localeCompare(b.name))
     };
-    
+
     // Save report to Firestore
     const reportRef = await db.collection('reports').add({
       type: 'inventory',
       ...report,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
-    
+
     return {
       reportId: reportRef.id,
       ...report
@@ -314,22 +324,22 @@ export const autoReorderProducts = functions.pubsub
   .timeZone('Asia/Kolkata')
   .onRun(async (context) => {
     console.log('Running auto-reorder job');
-    
+
     try {
       // Get products that need reordering
       const productsSnapshot = await db.collection('products')
         .where('autoReorder', '==', true)
         .where('isActive', '==', true)
         .get();
-      
-      const reorderList = [];
-      
+
+      const reorderList: any[] = [];
+
       for (const doc of productsSnapshot.docs) {
         const product = doc.data();
         const currentStock = product.stock || 0;
         const reorderLevel = product.reorderLevel || 10;
         const reorderQuantity = product.reorderQuantity || 50;
-        
+
         if (currentStock <= reorderLevel) {
           reorderList.push({
             productId: doc.id,
@@ -342,7 +352,7 @@ export const autoReorderProducts = functions.pubsub
           });
         }
       }
-      
+
       if (reorderList.length > 0) {
         // Create reorder notification
         await db.collection('notifications').add({
@@ -352,7 +362,7 @@ export const autoReorderProducts = functions.pubsub
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           read: false
         });
-        
+
         // Create purchase orders (simplified)
         for (const item of reorderList) {
           await db.collection('purchaseOrders').add({
@@ -365,7 +375,7 @@ export const autoReorderProducts = functions.pubsub
             createdAt: admin.firestore.FieldValue.serverTimestamp()
           });
         }
-        
+
         console.log(`Auto-reorder created for ${reorderList.length} products`);
       } else {
         console.log('No products need reordering');
@@ -381,4 +391,3 @@ export const inventoryFunctions = {
   generateInventoryReport,
   autoReorderProducts
 };
-

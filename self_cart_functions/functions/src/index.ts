@@ -1,7 +1,8 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import * as express from 'express';
-import * as cors from 'cors';
+import express from 'express';
+import { Request, Response } from 'express';
+import cors from 'cors';
 
 // Initialize Firebase Admin
 admin.initializeApp();
@@ -28,20 +29,13 @@ app.use(cors({ origin: true }));
 app.use(express.json());
 
 // Health check endpoint
-app.get('/health', (req, res) => {
+app.get('/health', (req: Request, res: Response) => {
   res.status(200).json({ 
     status: 'healthy', 
     timestamp: new Date().toISOString(),
     version: '1.0.0'
   });
 });
-
-// API routes
-app.use('/orders', require('./api/orders'));
-app.use('/payments', require('./api/payments'));
-app.use('/products', require('./api/products'));
-app.use('/users', require('./api/users'));
-app.use('/analytics', require('./api/analytics'));
 
 export const api = functions.https.onRequest(app);
 
@@ -64,7 +58,7 @@ export const dailyAnalytics = functions.pubsub
         .where('createdAt', '<', today)
         .get();
       
-      const dailyStats = {
+      const dailyStats: any = {
         date: yesterday.toISOString().split('T')[0],
         totalOrders: ordersSnapshot.size,
         totalRevenue: 0,
@@ -118,4 +112,3 @@ export const cleanupOldData = functions.pubsub
       console.error('Cleanup job failed:', error);
     }
   });
-

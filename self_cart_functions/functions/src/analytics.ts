@@ -3,37 +3,89 @@ import * as admin from 'firebase-admin';
 
 const db = admin.firestore();
 
+interface DailySales {
+  [date: string]: {
+    revenue: number;
+    orders: number;
+    items: number;
+  };
+}
+
+interface PaymentMethods {
+  [method: string]: number;
+}
+
+interface OrderStatuses {
+  [status: string]: number;
+}
+
+interface ProductSales {
+  [productId: string]: {
+    name: string;
+    category: string;
+    totalQuantity: number;
+    totalRevenue: number;
+    orderCount: number;
+  };
+}
+
+interface CategorySales {
+  [category: string]: {
+    totalQuantity: number;
+    totalRevenue: number;
+    productCount: number;
+    products?: Set<string>;
+  };
+}
+
+interface CustomerData {
+  [userId: string]: {
+    totalOrders: number;
+    totalSpent: number;
+    totalItems: number;
+    isNewCustomer: boolean;
+    firstOrderDate: Date;
+    lastOrderDate: Date;
+  };
+}
+
 // Generate comprehensive analytics report
 export const generateAnalyticsReport = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
-  
+
   // Check if user is admin
   const userDoc = await db.collection('users').doc(context.auth.uid).get();
   if (!userDoc.exists || !userDoc.data()?.isAdmin) {
     throw new functions.https.HttpsError('permission-denied', 'Only admins can generate analytics reports');
   }
-  
+
   const { startDate, endDate, reportType = 'comprehensive' } = data;
-  
+
   try {
     const start = new Date(startDate);
     const end = new Date(endDate);
-    
+
     // Validate date range
     if (start >= end) {
       throw new functions.https.HttpsError('invalid-argument', 'Start date must be before end date');
     }
-    
-    const report = {
+
+    const report: {
+      reportType: string;
+      dateRange: { startDate: string; endDate: string };
+      generatedAt: string;
+      generatedBy: string;
+      data: any;
+    } = {
       reportType,
       dateRange: { startDate, endDate },
       generatedAt: new Date().toISOString(),
       generatedBy: context.auth.uid,
       data: {}
     };
-    
+
     // Generate different types of reports
     switch (reportType) {
       case 'sales':
@@ -50,13 +102,13 @@ export const generateAnalyticsReport = functions.https.onCall(async (data, conte
         report.data = await generateComprehensiveReport(start, end);
         break;
     }
-    
+
     // Save report to Firestore
     const reportRef = await db.collection('analyticsReports').add({
       ...report,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
-    
+
     return {
       reportId: reportRef.id,
       ...report
@@ -74,24 +126,24 @@ async function generateSalesReport(startDate: Date, endDate: Date) {
     .where('createdAt', '<=', endDate)
     .where('paymentStatus', '==', 'completed')
     .get();
-  
+
   let totalRevenue = 0;
   let totalOrders = 0;
   let totalItems = 0;
   let totalDiscounts = 0;
-  const dailySales = {};
-  const paymentMethods = {};
-  const orderStatuses = {};
-  
+  const dailySales: DailySales = {};
+  const paymentMethods: PaymentMethods = {};
+  const orderStatuses: OrderStatuses = {};
+
   ordersSnapshot.forEach(doc => {
     const order = doc.data();
     const orderDate = order.createdAt.toDate().toISOString().split('T')[0];
-    
+
     totalRevenue += order.totalAmount || 0;
     totalOrders++;
     totalItems += order.items?.length || 0;
     totalDiscounts += order.discountAmount || 0;
-    
+
     // Daily sales
     if (!dailySales[orderDate]) {
       dailySales[orderDate] = { revenue: 0, orders: 0, items: 0 };
@@ -99,16 +151,16 @@ async function generateSalesReport(startDate: Date, endDate: Date) {
     dailySales[orderDate].revenue += order.totalAmount || 0;
     dailySales[orderDate].orders++;
     dailySales[orderDate].items += order.items?.length || 0;
-    
+
     // Payment methods
     const paymentMethod = order.paymentMethod || 'unknown';
     paymentMethods[paymentMethod] = (paymentMethods[paymentMethod] || 0) + 1;
-    
+
     // Order statuses
     const status = order.orderStatus || 'unknown';
     orderStatuses[status] = (orderStatuses[status] || 0) + 1;
   });
-  
+
   return {
     summary: {
       totalRevenue,
@@ -131,22 +183,22 @@ async function generateProductReport(startDate: Date, endDate: Date) {
     .where('createdAt', '<=', endDate)
     .where('paymentStatus', '==', 'completed')
     .get();
-  
-  const productSales = {};
-  const categorySales = {};
-  
+
+  const productSales: ProductSales = {};
+  const categorySales: CategorySales = {};
+
   for (const doc of ordersSnapshot.docs) {
     const order = doc.data();
-    
+
     for (const item of order.items || []) {
       const productId = item.productId;
       const quantity = item.quantity || 0;
       const revenue = item.totalPrice || 0;
-      
+
       // Get product details
       const productDoc = await db.collection('products').doc(productId).get();
       const product = productDoc.exists ? productDoc.data() : null;
-      
+
       // Product sales
       if (!productSales[productId]) {
         productSales[productId] = {
@@ -160,7 +212,7 @@ async function generateProductReport(startDate: Date, endDate: Date) {
       productSales[productId].totalQuantity += quantity;
       productSales[productId].totalRevenue += revenue;
       productSales[productId].orderCount++;
-      
+
       // Category sales
       const category = product?.category || 'Unknown';
       if (!categorySales[category]) {
@@ -173,22 +225,26 @@ async function generateProductReport(startDate: Date, endDate: Date) {
       }
       categorySales[category].totalQuantity += quantity;
       categorySales[category].totalRevenue += revenue;
-      categorySales[category].products.add(productId);
+      if (categorySales[category].products) {
+        categorySales[category].products.add(productId);
+      }
     }
   }
-  
+
   // Convert sets to counts
   Object.keys(categorySales).forEach(category => {
-    categorySales[category].productCount = categorySales[category].products.size;
-    delete categorySales[category].products;
+    if (categorySales[category].products) {
+      categorySales[category].productCount = categorySales[category].products.size;
+      delete categorySales[category].products;
+    }
   });
-  
+
   // Sort products by revenue
   const topProducts = Object.entries(productSales)
     .sort(([,a], [,b]) => b.totalRevenue - a.totalRevenue)
     .slice(0, 20)
     .map(([productId, data]) => ({ productId, ...data }));
-  
+
   return {
     topProducts,
     categorySales,
@@ -204,24 +260,24 @@ async function generateCustomerReport(startDate: Date, endDate: Date) {
     .where('createdAt', '<=', endDate)
     .where('paymentStatus', '==', 'completed')
     .get();
-  
-  const customerData = {};
-  const newCustomers = new Set();
-  
+
+  const customerData: CustomerData = {};
+  const newCustomers = new Set<string>();
+
   // Get all users who registered in this period
   const usersSnapshot = await db.collection('users')
     .where('createdAt', '>=', startDate)
     .where('createdAt', '<=', endDate)
     .get();
-  
+
   usersSnapshot.forEach(doc => {
     newCustomers.add(doc.id);
   });
-  
+
   ordersSnapshot.forEach(doc => {
     const order = doc.data();
     const userId = order.userId;
-    
+
     if (!customerData[userId]) {
       customerData[userId] = {
         totalOrders: 0,
@@ -232,12 +288,12 @@ async function generateCustomerReport(startDate: Date, endDate: Date) {
         lastOrderDate: order.createdAt.toDate()
       };
     }
-    
+
     const customer = customerData[userId];
     customer.totalOrders++;
     customer.totalSpent += order.totalAmount || 0;
     customer.totalItems += order.items?.length || 0;
-    
+
     const orderDate = order.createdAt.toDate();
     if (orderDate < customer.firstOrderDate) {
       customer.firstOrderDate = orderDate;
@@ -246,7 +302,7 @@ async function generateCustomerReport(startDate: Date, endDate: Date) {
       customer.lastOrderDate = orderDate;
     }
   });
-  
+
   // Calculate customer segments
   const customerSegments = {
     newCustomers: 0,
@@ -254,32 +310,32 @@ async function generateCustomerReport(startDate: Date, endDate: Date) {
     loyalCustomers: 0, // 5+ orders
     highValueCustomers: 0 // Top 20% by spending
   };
-  
+
   const customerValues = Object.values(customerData).map(c => c.totalSpent).sort((a, b) => b - a);
   const highValueThreshold = customerValues[Math.floor(customerValues.length * 0.2)] || 0;
-  
+
   Object.values(customerData).forEach(customer => {
     if (customer.isNewCustomer) {
       customerSegments.newCustomers++;
     } else {
       customerSegments.returningCustomers++;
     }
-    
+
     if (customer.totalOrders >= 5) {
       customerSegments.loyalCustomers++;
     }
-    
+
     if (customer.totalSpent >= highValueThreshold) {
       customerSegments.highValueCustomers++;
     }
   });
-  
+
   return {
     totalCustomers: Object.keys(customerData).length,
     newCustomersCount: newCustomers.size,
     customerSegments,
-    averageOrdersPerCustomer: Object.keys(customerData).length > 0 
-      ? Object.values(customerData).reduce((sum, c) => sum + c.totalOrders, 0) / Object.keys(customerData).length 
+    averageOrdersPerCustomer: Object.keys(customerData).length > 0
+      ? Object.values(customerData).reduce((sum, c) => sum + c.totalOrders, 0) / Object.keys(customerData).length
       : 0,
     averageSpendPerCustomer: Object.keys(customerData).length > 0
       ? Object.values(customerData).reduce((sum, c) => sum + c.totalSpent, 0) / Object.keys(customerData).length
@@ -294,7 +350,7 @@ async function generateComprehensiveReport(startDate: Date, endDate: Date) {
     generateProductReport(startDate, endDate),
     generateCustomerReport(startDate, endDate)
   ]);
-  
+
   // Get inventory data
   const productsSnapshot = await db.collection('products').get();
   let totalProducts = 0;
@@ -302,26 +358,44 @@ async function generateComprehensiveReport(startDate: Date, endDate: Date) {
   let outOfStockProducts = 0;
   let lowStockProducts = 0;
   let totalInventoryValue = 0;
-  
+
   productsSnapshot.forEach(doc => {
     const product = doc.data();
     totalProducts++;
-    
+
     if (product.isActive) {
       activeProducts++;
     }
-    
+
     const stock = product.stock || 0;
     const price = product.price || 0;
     totalInventoryValue += stock * price;
-    
+
     if (stock === 0) {
       outOfStockProducts++;
     } else if (stock <= (product.lowStockThreshold || 10)) {
       lowStockProducts++;
     }
   });
-  
+
+  const kpis = {
+    conversionRate: 0,
+    customerRetentionRate: 0,
+    averageOrderValue: 0,
+    inventoryTurnover: 0
+  };
+
+  if (customerData && customerData.totalCustomers > 0 && salesData && salesData.summary) {
+    kpis.conversionRate = (salesData.summary.totalOrders / customerData.totalCustomers) * 100;
+    if (customerData.customerSegments) {
+      kpis.customerRetentionRate = (customerData.customerSegments.returningCustomers / customerData.totalCustomers) * 100;
+    }
+    kpis.averageOrderValue = salesData.summary.averageOrderValue;
+    if (totalInventoryValue > 0) {
+      kpis.inventoryTurnover = salesData.summary.totalRevenue / totalInventoryValue;
+    }
+  }
+
   return {
     sales: salesData,
     products: productData,
@@ -334,12 +408,7 @@ async function generateComprehensiveReport(startDate: Date, endDate: Date) {
       totalInventoryValue,
       stockHealthScore: totalProducts > 0 ? ((totalProducts - outOfStockProducts - lowStockProducts) / totalProducts) * 100 : 0
     },
-    kpis: {
-      conversionRate: customerData.totalCustomers > 0 ? (salesData.summary.totalOrders / customerData.totalCustomers) * 100 : 0,
-      customerRetentionRate: customerData.totalCustomers > 0 ? (customerData.customerSegments.returningCustomers / customerData.totalCustomers) * 100 : 0,
-      averageOrderValue: salesData.summary.averageOrderValue,
-      inventoryTurnover: totalInventoryValue > 0 ? salesData.summary.totalRevenue / totalInventoryValue : 0
-    }
+    kpis
   };
 }
 
@@ -348,7 +417,7 @@ export const getDashboardData = functions.https.onCall(async (data, context) => 
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
   }
-  
+
   try {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -357,53 +426,53 @@ export const getDashboardData = functions.https.onCall(async (data, context) => 
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const lastMonth = new Date(thisMonth);
     lastMonth.setMonth(lastMonth.getMonth() - 1);
-    
+
     // Today's metrics
     const todayOrders = await db.collection('orders')
       .where('createdAt', '>=', today)
       .where('paymentStatus', '==', 'completed')
       .get();
-    
+
     // Yesterday's metrics
     const yesterdayOrders = await db.collection('orders')
       .where('createdAt', '>=', yesterday)
       .where('createdAt', '<', today)
       .where('paymentStatus', '==', 'completed')
       .get();
-    
+
     // This month's metrics
     const thisMonthOrders = await db.collection('orders')
       .where('createdAt', '>=', thisMonth)
       .where('paymentStatus', '==', 'completed')
       .get();
-    
+
     // Calculate metrics
     let todayRevenue = 0;
     let yesterdayRevenue = 0;
     let thisMonthRevenue = 0;
-    
+
     todayOrders.forEach(doc => {
       todayRevenue += doc.data().totalAmount || 0;
     });
-    
+
     yesterdayOrders.forEach(doc => {
       yesterdayRevenue += doc.data().totalAmount || 0;
     });
-    
+
     thisMonthOrders.forEach(doc => {
       thisMonthRevenue += doc.data().totalAmount || 0;
     });
-    
+
     // Get active users count
     const activeUsers = await db.collection('users')
       .where('isActive', '==', true)
       .get();
-    
+
     // Get low stock products
     const lowStockProducts = await db.collection('products')
       .where('isActive', '==', true)
       .get();
-    
+
     let lowStockCount = 0;
     lowStockProducts.forEach(doc => {
       const product = doc.data();
@@ -413,7 +482,7 @@ export const getDashboardData = functions.https.onCall(async (data, context) => 
         lowStockCount++;
       }
     });
-    
+
     return {
       today: {
         orders: todayOrders.size,
@@ -448,4 +517,3 @@ export const analyticsFunction = {
   generateAnalyticsReport,
   getDashboardData
 };
-

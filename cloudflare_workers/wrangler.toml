@@ -1,0 +1,21 @@
+name = "self-cart-api"
+main = "src/index.ts"
+compatibility_date = "2023-12-18"
+
+[env.production]
+name = "self-cart-api"
+
+[env.staging]
+name = "self-cart-api-staging"
+
+# Environment variables (set via wrangler secret put)
+# FIREBASE_PROJECT_ID
+# FIREBASE_PRIVATE_KEY
+# FIREBASE_CLIENT_EMAIL
+# RAZORPAY_KEY_ID
+# RAZORPAY_KEY_SECRET
+# STRIPE_SECRET_KEY
+# SMTP_HOST
+# SMTP_PORT
+# SMTP_USER
+# SMTP_PASS
